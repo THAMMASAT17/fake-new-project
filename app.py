@@ -182,8 +182,8 @@ def analyze_logic_by_category(text, exact_claim, category, web_data, queries):
         )
         data = json.loads(res.choices[0].message.content)
         return data.get("result"), data.get("reason"), data.get("confidence", 50), queries, category
-    except Exception:
-        return "⚠ Error", "ระบบ AI ขัดข้อง", 0, [], "Unknown"
+    except Exception as e:
+        return "⚠ Error", f"ระบบ AI ขัดข้อง: {str(e)}", 0, [], "Unknown"
 
 @app.route("/", methods=["GET","POST"])
 def index():
