@@ -83,7 +83,7 @@ def classify_and_route(text):
         return (
             data.get("category", "General"), 
             data.get("queries", [text[:30]]), 
-            data.get("exact_claim", "Unable to extract exact claim.")
+            data.get("exact_claim", "ไม่สามารถวิเคราะห์บริบทได้")
         )
     except:
         return "General", [text[:30]], "ระบบเกิดข้อผิดพลาดในการดึงข้อมูล"
