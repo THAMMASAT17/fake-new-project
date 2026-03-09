@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Fake News Scanner - RMUTT Edition</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+
+    <div id="loading-overlay" class="loading-hidden">
+        <div class="loader-content">
+            <div class="spinner"></div>
+            <h2 id="loading-text">กำลังค้นหาข้อมูลจากสื่อที่เชื่อถือได้...</h2>
+            <p>โปรดรอสักครู่ ระบบกำลังทำงาน</p>
+        </div>
+    </div>
+
+    <video autoplay muted loop id="bg-video">
+        <source src="{{ url_for('static', filename='news-bg.mp4') }}" type="video/mp4">
+    </video>
+    <div class="overlay"></div>
+
+    <div class="header">
+        <div class="live">● LIVE</div>
+        <div class="channel">AI FACT CHECK SYSTEM</div>
+    </div>
+
+    <div class="main-container">
+        <div class="breaking-title">NEWS SCANNER</div>
+
+        <div class="panel">
+            <form method="POST" id="scan-form" onsubmit="showLoading()">
+                <textarea id="news-input" name="news" placeholder="วางเนื้อหาข่าวที่ต้องการตรวจสอบที่นี่..." required>{{news}}</textarea>
+                
+                <div class="internal-history">
+                    <div class="history-header">
+                        <p class="history-label"><i class="fas fa-history"></i> คลิกเพื่อตรวจสอบข่าวยอดฮิต</p>
+                        <button type="button" class="refresh-history-btn" onclick="window.location.href='/'" title="รีเฟรชหน้าต่าง">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </div>
+                    <div class="history-scroll">
+                        {% if histories %}
+                            {% for item in histories %}
+                            <div class="history-pill" onclick="fillNews('{{ item.user_query | replace('\n', ' ') | escape }}')">
+                                {{ item.user_query[:35] }}...
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                            <span class="no-history">ยังไม่มีประวัติการค้นหา</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <button type="submit" class="scan-btn">
+                    <i class="fas fa-search-plus"></i> SCAN NEWS
+                </button>
+            </form>
+
+            {% if result %}
+            <div class="result-card animate-up">
+                <div class="result-header">
+                    <h2 class="result-title">{{result}}</h2>
+                    
+                    <div class="feedback-box">
+                        <span class="fb-text">ผลลัพธ์แม่นยำไหม?</span>
+                        <button onclick="sendFeedback('{{record_id}}', 'accurate')" class="fb-btn up"><i class="fas fa-thumbs-up"></i></button>
+                        <button onclick="sendFeedback('{{record_id}}', 'inaccurate')" class="fb-btn down"><i class="fas fa-thumbs-down"></i></button>
+                    </div>
+                </div>
+
+                <div class="time-taken">
+                    <i class="fas fa-stopwatch"></i> ใช้เวลาประมวลผล: {{ process_time }} วินาที 
+                    {% if is_cached %} <span class="cached-badge"><i class="fas fa-bolt"></i> ดึงจากฐานข้อมูลอัจฉริยะ (เร็วพิเศษ)</span> {% endif %}
+                </div>
+
+                <div class="confidence-container">
+                    <div class="confidence-info">
+                        <span>AI Confidence Score</span>
+                        <span>{{confidence}}%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-fill" style="width: {{confidence}}%;"></div>
+                    </div>
+                </div>
+
+                <div class="analysis-details">
+                    <div class="detail-item">
+                        <i class="fas fa-robot"></i> <strong>สิ่งที่สืบพบจาก AI:</strong>
+                        <p>{{reason}}</p>
+                    </div>
+
+                    <div class="tags-group">
+                        <div class="tag-row">
+                            <span class="tag-label"><i class="fas fa-bullseye"></i> Signals:</span>
+                            <div class="tags-container">
+                                {% for s in signals %}<span class="s-badge">{{s}}</span>{% endfor %}
+                            </div>
+                        </div>
+                        <div class="tag-row">
+                            <span class="tag-label"><i class="fas fa-key"></i> Keywords:</span>
+                            <div class="tags-container">
+                                {% for k in keywords %}<span class="k-badge">{{k}}</span>{% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sources-container">
+                    <h3 class="sources-title"><i class="fas fa-check-double"></i> แหล่งอ้างอิงที่พบ (Sources)</h3>
+                    <div class="sources-grid">
+                        {% if references %}
+                            {% for ref in references %}
+                            <a href="{{ref.link}}" target="_blank" class="source-card">
+                                <div class="src-meta">{{ref.domain}}</div>
+                                <div class="src-title">{{ref.title[:75]}}...</div>
+                                <div class="src-link-hint">ดูข่าวต้นฉบับ <i class="fas fa-external-link-alt"></i></div>
+                            </a>
+                            {% endfor %}
+                        {% else %}
+                            <p class="empty-sources">ไม่พบข้อมูลอ้างอิงที่เกี่ยวข้องในระบบ (อาจเป็นข่าวปลอมหรือข่าวส่วนตัว)</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+    function fillNews(text) {
+        document.getElementById("news-input").value = text;
+    }
+
+    function showLoading() {
+        document.getElementById("loading-overlay").classList.remove("loading-hidden");
+        const loadingText = document.getElementById("loading-text");
+        
+        // จำลองขั้นตอนให้ดูมีชีวิตชีวา
+        setTimeout(() => { loadingText.innerText = "กำลังวิเคราะห์บริบทของข่าวด้วย AI..."; }, 2500);
+        setTimeout(() => { loadingText.innerText = "กำลังประเมินและให้คะแนนความน่าเชื่อถือ..."; }, 5000);
+    }
+
+    async function sendFeedback(id, status) {
+        if (!id) return;
+        try {
+            const response = await fetch('/feedback', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: id, status: status })
+            });
+            const data = await response.json();
+            if (data.success) {
+                document.querySelector('.feedback-box').innerHTML = '<span class="thanks-msg"><i class="fas fa-check-circle"></i> ขอบคุณ! ระบบจดจำแล้ว</span>';
+            }
+        } catch (e) { console.error(e); }
+    }
+    </script>
+</body>
+</html>
