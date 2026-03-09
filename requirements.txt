@@ -6,3 +6,4 @@ beautifulsoup4
 requests
 supabase
 gunicorn
+duckduckgo_search
