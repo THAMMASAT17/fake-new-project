@@ -1,7 +1,7 @@
 flask
 groq
 python-dotenv
-duckduckgo_search
+ddgs
 beautifulsoup4
 requests
 supabase

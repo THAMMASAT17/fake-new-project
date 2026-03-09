@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from groq import Groq
 from dotenv import load_dotenv
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from supabase import create_client, Client
 
 load_dotenv()
