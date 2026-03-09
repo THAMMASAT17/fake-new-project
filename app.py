@@ -1,11 +1,9 @@
 from flask import Flask, render_template, request, jsonify, make_response
-import json
 import os
 import time
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from groq import Groq
 from dotenv import load_dotenv
 from ddgs import DDGS
 from supabase import create_client, Client
@@ -14,20 +12,14 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# ======================
-# AI
-# ======================
-
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
 # 🟢 เชื่อมต่อ Supabase
 SUPABASE_URL = "https://jeggrrvcjhcxevzfltok.supabase.co"
 SUPABASE_KEY = "sb_publishable_BQaWPVvo7XPPx6hzZ6QVYg_67qKGY-l"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ======================
-# TRUSTED NEWS SOURCES
-# ======================
+# ================================
+# TRUSTED NEWS DOMAINS
+# ================================
 
 TRUSTED_DOMAINS = [
 
@@ -38,47 +30,50 @@ TRUSTED_DOMAINS = [
 "dailynews.co.th",
 "sanook.com",
 "kapook.com",
-"daradaily.com",
 
 "bbc.com",
-"reuters.com",
 "cnn.com",
+"reuters.com",
 "apnews.com",
 "theguardian.com",
 
 "soompi.com",
-"allkpop.com",
-"koreaboo.com"
+"allkpop.com"
+
 ]
 
-# ======================
+# ================================
 # CLICKBAIT WORDS
-# ======================
+# ================================
 
 CLICKBAIT = [
+
 "ด่วน",
 "ช็อก",
 "อึ้ง",
 "แชร์ด่วน",
 "ก่อนโดนลบ",
-"ห้ามพลาด"
+"ห้ามพลาด",
+"คุณจะไม่เชื่อ"
 ]
 
-# ======================
+# ================================
 # SCAM WORDS
-# ======================
+# ================================
 
 SCAM = [
+
 "แจกเงินฟรี",
 "แชร์โพสต์นี้",
 "รับเงินฟรี",
-"โอนเงินฟรี",
-"รับเงินทันที"
+"รับเงินทันที",
+"โอนเงินให้",
+"กดลิงก์รับเงิน"
 ]
 
-# ======================
+# ================================
 # SCRAPE NEWS
-# ======================
+# ================================
 
 def scrape_news(url, snippet):
 
@@ -100,55 +95,62 @@ def scrape_news(url, snippet):
         return snippet
 
     except:
+
         return snippet
 
-# ======================
+# ================================
 # SEARCH NEWS
-# ======================
+# ================================
 
 def search_news(query):
 
     results = []
     seen = set()
 
-    with DDGS() as ddgs:
+    try:
 
-        search = ddgs.text(query, region="th-th", max_results=20)
+        with DDGS() as ddgs:
 
-        for r in search:
+            search = ddgs.text(query, region="th-th", max_results=20)
 
-            link = r.get("href", "")
+            for r in search:
 
-            if not link or link in seen:
-                continue
+                link = r.get("href","")
 
-            clean = link.replace("https://", "").replace("http://", "")
+                if not link or link in seen:
+                    continue
 
-            if any(domain in clean for domain in TRUSTED_DOMAINS):
+                clean = link.replace("https://","").replace("http://","")
 
-                seen.add(link)
+                if any(domain in clean for domain in TRUSTED_DOMAINS):
 
-                snippet = r.get("body", "")
+                    seen.add(link)
 
-                body = scrape_news(link, snippet)
+                    snippet = r.get("body","")
 
-                results.append({
+                    body = scrape_news(link, snippet)
 
-                    "title": r.get("title", ""),
-                    "body": body,
-                    "link": link,
-                    "domain": urlparse(link).netloc
+                    results.append({
 
-                })
+                        "title": r.get("title",""),
+                        "body": body,
+                        "link": link,
+                        "domain": urlparse(link).netloc
 
-            if len(results) >= 3:
-                break
+                    })
+
+                if len(results) >= 3:
+                    break
+
+    except Exception as e:
+
+        print("Search error:", e)
 
     return results
 
-# ======================
-# CLICKBAIT DETECTION
-# ======================
+# ================================
+# CLICKBAIT DETECT
+# ================================
 
 def detect_clickbait(text):
 
@@ -158,9 +160,9 @@ def detect_clickbait(text):
 
     return False
 
-# ======================
-# SCAM DETECTION
-# ======================
+# ================================
+# SCAM DETECT
+# ================================
 
 def detect_scam(text):
 
@@ -170,33 +172,44 @@ def detect_scam(text):
 
     return False
 
-# ======================
-# FACT CHECK
-# ======================
+# ================================
+# FACT CHECK LOGIC
+# ================================
 
 def fact_check(text, web_data):
 
+    # scam
+
+    if detect_scam(text):
+        return "Fake","ข้อความเข้าข่ายหลอกลวง",10
+
+    # clickbait
+
+    if detect_clickbait(text):
+        return "Fake","ข้อความมีลักษณะ clickbait",20
+
+    # ไม่มีข่าวเลย
+
     if not web_data:
-        return "⚠ Fake", "ไม่พบข่าวจากแหล่งข่าวที่เชื่อถือได้", 20
+        return "Fake","ไม่พบข่าวจากแหล่งข่าวที่เชื่อถือได้",25
 
-    match_score = 0
+    # มีข่าวหลายแหล่ง
 
-    for news in web_data:
-        if any(word in news["body"] for word in text.split()):
-            match_score += 1
+    if len(web_data) >= 2:
 
-    if match_score == 0:
-        return "⚠ Fake", "ไม่พบเนื้อหาข่าวที่ตรงกับข้อความ", 25
+        confidence = min(70 + len(web_data)*5, 90)
 
-    confidence = min(60 + match_score*10, 90)
+        return "Real","พบข่าวจากหลายแหล่งข่าวที่เชื่อถือได้",confidence
 
-    return "✔ Real", "พบข่าวที่มีเนื้อหาตรงกับข้อความ", confidence
+    # มีแหล่งเดียว
 
-# ======================
-# ROUTE
-# ======================
+    return "Real","พบข่าวจากแหล่งข่าวที่เชื่อถือได้",65
 
-@app.route("/", methods=["GET", "POST"])
+# ================================
+# MAIN ROUTE
+# ================================
+
+@app.route("/", methods=["GET","POST"])
 def index():
 
     context = {}
@@ -212,6 +225,7 @@ def index():
         context["histories"] = history.data
 
     except:
+
         context["histories"] = []
 
     if request.method == "POST":
@@ -220,11 +234,44 @@ def index():
 
         start = time.time()
 
+        # =====================
+        # CACHE CHECK
+        # =====================
+
+        cached = supabase.table("search_history")\
+        .select("*")\
+        .eq("user_query", news)\
+        .limit(1)\
+        .execute()
+
+        if cached.data:
+
+            c = cached.data[0]
+
+            context.update({
+
+                "result": c["ai_result"],
+                "reason": c["ai_reason"],
+                "confidence": c["confidence"],
+                "references": c["sources"],
+                "news": news,
+                "process_time": 0.1,
+                "signals": ["Cache Result"],
+                "keywords": news.split(" ")[:5]
+
+            })
+
+            return render_template("index.html", **context)
+
+        # =====================
+        # SEARCH NEWS
+        # =====================
+
         web_data = search_news(news)
 
         result, reason, confidence = fact_check(news, web_data)
 
-        process_time = round(time.time() - start, 2)
+        process_time = round(time.time() - start,2)
 
         try:
 
@@ -238,8 +285,9 @@ def index():
 
             }).execute()
 
-        except:
-            pass
+        except Exception as e:
+
+            print("DB error:", e)
 
         context.update({
 
@@ -249,21 +297,20 @@ def index():
             "references": web_data,
             "news": news,
             "process_time": process_time,
-
-            "signals": ["Trusted News Sources", "AI Fact Check"],
+            "signals": ["Trusted Sources","AI Fact Check"],
             "keywords": news.split(" ")[:5]
 
         })
 
     response = make_response(render_template("index.html", **context))
 
-    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
+    response.headers["Cache-Control"] = "no-cache"
 
     return response
 
-# ======================
+# ================================
+# FEEDBACK
+# ================================
 
 @app.route("/feedback", methods=["POST"])
 def feedback():
@@ -287,7 +334,7 @@ def feedback():
 
         return jsonify({"success": False})
 
-# ======================
+# ================================
 
 if __name__ == "__main__":
 
