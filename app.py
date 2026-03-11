@@ -1,11 +1,9 @@
-from flask import Flask, render_template, request, jsonify
-import json
+from flask import Flask, render_template, request, jsonify, make_response
 import os
 import time
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
-from groq import Groq
 from dotenv import load_dotenv
 from duckduckgo_search import DDGS
 from supabase import create_client, Client
@@ -84,6 +82,7 @@ def search_trusted_news(queries):
     seen_links = set()
     
     try:
+
         with DDGS() as ddgs:
             for search_q in queries:
                 if len(results) >= 3: 
@@ -115,7 +114,9 @@ def search_trusted_news(queries):
                         if len(results) >= 3: break
                 time.sleep(1) 
     except Exception as e:
-        print(f"❌ Search Error: {e}")
+
+        print("Search error:", e)
+
     return results
 
 def analyze_logic_strict(text, exact_claim, web_data, queries):
@@ -182,15 +183,25 @@ def analyze_logic_strict(text, exact_claim, web_data, queries):
 
 @app.route("/", methods=["GET","POST"])
 def index():
+
     context = {}
-    
+
     try:
-        history_response = supabase.table("search_history").select("id, user_query").order("created_at", desc=True).limit(5).execute()
-        context['histories'] = history_response.data
+
+        history = supabase.table("search_history")\
+        .select("id,user_query")\
+        .order("created_at", desc=True)\
+        .limit(5)\
+        .execute()
+
+        context["histories"] = history.data
+
     except:
-        context['histories'] = []
+
+        context["histories"] = []
 
     if request.method == "POST":
+
         news = request.form["news"].strip()
         start_time = time.time()
         
@@ -232,20 +243,61 @@ def index():
         result, reason, confidence, keywords = analyze_logic_strict(news, exact_claim, web_data, queries)
         references = web_data[:4] 
 
-        process_time = round(time.time() - start_time, 2)
+        # =====================
+        # CACHE CHECK
+        # =====================
+
+        cached = supabase.table("search_history")\
+        .select("*")\
+        .eq("user_query", news)\
+        .limit(1)\
+        .execute()
+
+        if cached.data:
+
+            c = cached.data[0]
+
+            context.update({
+
+                "result": c["ai_result"],
+                "reason": c["ai_reason"],
+                "confidence": c["confidence"],
+                "references": c["sources"],
+                "news": news,
+                "process_time": 0.1,
+                "signals": ["Cache Result"],
+                "keywords": news.split(" ")[:5]
+
+            })
+
+            return render_template("index.html", **context)
+
+        # =====================
+        # SEARCH NEWS
+        # =====================
+
+        web_data = search_news(news)
+
+        result, reason, confidence = fact_check(news, web_data)
+
+        process_time = round(time.time() - start,2)
 
         try:
-            db_insert = supabase.table("search_history").insert({
+
+            supabase.table("search_history").insert({
+
                 "user_query": news,
                 "category": category, # ใส่ Global Search เพื่อให้ฐานข้อมูลไม่พัง
                 "ai_result": result,
                 "ai_reason": reason,
                 "confidence": confidence,
-                "sources": references
+                "sources": web_data
+
             }).execute()
-            context['record_id'] = db_insert.data[0]['id']
+
         except Exception as e:
-            print(f"Db Insert Error: {e}")
+
+            print("DB error:", e)
 
         context.update({
             'result': result, 
@@ -261,19 +313,40 @@ def index():
             'exact_claim': exact_claim 
         })
 
-    return render_template("index.html", **context)
+    response = make_response(render_template("index.html", **context))
+
+    response.headers["Cache-Control"] = "no-cache"
+
+    return response
+
+# ================================
+# FEEDBACK
+# ================================
 
 @app.route("/feedback", methods=["POST"])
 def feedback():
+
     data = request.json
+
     record_id = data.get("id")
-    status = data.get("status") 
-    
+
+    status = data.get("status")
+
     try:
-        supabase.table("search_history").update({"user_feedback": status}).eq("id", record_id).execute()
+
+        supabase.table("search_history")\
+        .update({"user_feedback": status})\
+        .eq("id", record_id)\
+        .execute()
+
         return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+
+    except:
+
+        return jsonify({"success": False})
+
+# ================================
 
 if __name__ == "__main__":
+
     app.run(debug=True)
