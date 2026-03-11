@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 from duckduckgo_search import DDGS
 from supabase import create_client, Client
+from groq import Groq
 
 load_dotenv()
 
