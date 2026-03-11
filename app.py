@@ -1,31 +1,33 @@
 from flask import Flask, render_template, request, jsonify, make_response
 import os
 import time
+import json  # 🟢 เพิ่ม import json ที่หายไป
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from dotenv import load_dotenv
-from ddgs import DDGS
+from duckduckgo_search import DDGS  # 🟢 แก้ชื่อ Import ให้ถูกต้อง
 from supabase import create_client, Client
 from groq import Groq
 
 load_dotenv()
 
 app = Flask(__name__)
-# 🟢 ดึง API Key ของ Groq จาก .env
+
+# 🟢 ดึง API Key และตั้งค่า Groq Client ให้สมบูรณ์
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=GROQ_API_KEY)
 
 # 🟢 เชื่อมต่อ Supabase โดยดึงค่าจาก .env
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# (Optional) เช็กเพื่อป้องกันความผิดพลาดกรณีหาตัวแปรไม่เจอ
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("ไม่พบค่า SUPABASE_URL หรือ SUPABASE_KEY ในไฟล์ .env")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 🟢 TRUSTED_DOMAINS: ยุบรวมทุกลิงก์ที่น่าเชื่อถือ ไม่แยกหมวดหมู่แล้ว
+# 🟢 TRUSTED_DOMAINS: ยุบรวมทุกลิงก์ที่น่าเชื่อถือ
 TRUSTED_DOMAINS = [
     "rama.mahidol.ac.th", "fda.moph.go.th", "sure.tna.mcot.net", "pobpad.com", "chula.ac.th", 
     "thairath.co.th", "thaipbs.or.th", "who.int", "wikipedia.org",
@@ -81,31 +83,22 @@ def scrape_full_news(url, ddg_snippet=""):
 def search_trusted_news(queries):
     results = []
     seen_links = set()
-    
     try:
-
         with DDGS() as ddgs:
             for search_q in queries:
                 if len(results) >= 3: 
                     break 
-                
                 print(f"🔍 Searching for: {search_q}")
                 search_results = ddgs.text(search_q, region='th-th', safesearch='off', max_results=15)
-                
                 if search_results:
                     for r in search_results:
                         link = r.get('href', '')
                         if not link or link in seen_links: continue
-                        
                         clean_url = link.replace("https://", "").replace("http://", "").replace("www.", "")
-                        
-                        # เช็คว่าอยู่ในเว็บที่เชื่อถือได้หรือไม่ (ไม่แยกหมวดหมู่)
                         if any(trusted.lower() in clean_url.lower() for trusted in TRUSTED_DOMAINS):
                             seen_links.add(link)
-                            
                             ddg_snippet = r.get('body', '')
                             full_content = scrape_full_news(link, ddg_snippet)
-                            
                             results.append({
                                 "title": r.get('title', ''),
                                 "body": full_content,
@@ -115,15 +108,10 @@ def search_trusted_news(queries):
                         if len(results) >= 3: break
                 time.sleep(1) 
     except Exception as e:
-
         print("Search error:", e)
-
     return results
 
 def analyze_logic_strict(text, exact_claim, web_data, queries):
-    """
-    ฟังก์ชันวิเคราะห์ตามกฎใหม่ 3 ข้อ: Real, Fake, หรือ ? (Misleading)
-    """
     web_context = ""
     for i, d in enumerate(web_data):
         web_context += f"อ้างอิง {i+1} [{d['domain']}]: {d['title']}\nเนื้อหา: {d['body']}\n\n"
@@ -149,7 +137,6 @@ def analyze_logic_strict(text, exact_claim, web_data, queries):
         "reason": "อธิบายสั้นๆ (ภาษาไทย) ว่าทำไมถึงตัดสินแบบนี้ อิงตามกฎข้อใด"
     }}
     """
-    
     try:
         res = client.chat.completions.create(
             messages=[{"role": "system", "content": "You are a strict fact checker. Output ONLY JSON."}, {"role": "user", "content": prompt}],
@@ -157,14 +144,11 @@ def analyze_logic_strict(text, exact_claim, web_data, queries):
             response_format={"type": "json_object"},
             temperature=0.0
         )
-        
         data = json.loads(res.choices[0].message.content)
-        
-        label = data.get("label", "fake") # ถ้าพังให้ตี Fake ไว้ก่อน
+        label = data.get("label", "fake") 
         score = data.get("credibility_score", 0.0)
         reason = data.get("reason", "ประมวลผลเหตุผลผิดพลาด")
         
-        # แมปปิ้งผลลัพธ์ให้แสดงเป็น UI ตามที่คุณต้องการ
         if label == "real":
             ui_result = "✔ Real (เจอข้อมูลยืนยัน)"
         elif label == "fake":
@@ -175,7 +159,6 @@ def analyze_logic_strict(text, exact_claim, web_data, queries):
             ui_result = "⚠ Fake (ไม่มีข้อมูล/เข้าข่ายหลอกลวง)"
             
         ui_confidence = int(float(score) * 100) 
-        
         return ui_result, reason, ui_confidence, queries
 
     except Exception as e:
@@ -184,31 +167,19 @@ def analyze_logic_strict(text, exact_claim, web_data, queries):
 
 @app.route("/", methods=["GET","POST"])
 def index():
-
     context = {}
-
     try:
-
-        history = supabase.table("search_history")\
-        .select("id,user_query")\
-        .order("created_at", desc=True)\
-        .limit(5)\
-        .execute()
-
+        history = supabase.table("search_history").select("id,user_query").order("created_at", desc=True).limit(5).execute()
         context["histories"] = history.data
-
     except:
-
         context["histories"] = []
 
     if request.method == "POST":
-
         news = request.form["news"].strip()
         start_time = time.time()
-        
-        # ปรับปรุง: ไม่ใช้ Category แล้ว ใช้คำว่า "Global Search" แทนเพื่อบันทึกลง Database
         category = "Global Search" 
         
+        # 1. เช็ก Cache จาก Database ก่อน
         try:
             cached_res = supabase.table("search_history").select("*").eq("user_query", news).eq("user_feedback", "accurate").limit(1).execute()
             if cached_res.data:
@@ -229,75 +200,31 @@ def index():
                     'is_cached': True,
                     'exact_claim': c_data.get('user_query', news)
                 })
-                return render_template("index.html", **context)
+                response = make_response(render_template("index.html", **context))
+                response.headers["Cache-Control"] = "no-cache"
+                return response
         except Exception as e:
             print("Cache check error:", e)
 
-        # 1. ดึง Keyword (ไม่แยกหมวดหมู่แล้ว)
+        # 2. ค้นหาและวิเคราะห์ใหม่ 🟢 (ลบโค้ดเก่าที่ซ้ำซ้อนออกหมดแล้ว)
         queries, exact_claim = extract_claim_and_queries(news)
-        print(f"🧠 AI Exact Claim: {exact_claim}")
-        
-        # 2. ค้นหาข่าวจากทุกลิงก์
         web_data = search_trusted_news(queries)
-        
-        # 3. วิเคราะห์ตามกฎเหล็ก 3 ข้อ
         result, reason, confidence, keywords = analyze_logic_strict(news, exact_claim, web_data, queries)
         references = web_data[:4] 
+        process_time = round(time.time() - start_time, 2)
 
-        # =====================
-        # CACHE CHECK
-        # =====================
-
-        cached = supabase.table("search_history")\
-        .select("*")\
-        .eq("user_query", news)\
-        .limit(1)\
-        .execute()
-
-        if cached.data:
-
-            c = cached.data[0]
-
-            context.update({
-
-                "result": c["ai_result"],
-                "reason": c["ai_reason"],
-                "confidence": c["confidence"],
-                "references": c["sources"],
-                "news": news,
-                "process_time": 0.1,
-                "signals": ["Cache Result"],
-                "keywords": news.split(" ")[:5]
-
-            })
-
-            return render_template("index.html", **context)
-
-        # =====================
-        # SEARCH NEWS
-        # =====================
-
-        web_data = search_news(news)
-
-        result, reason, confidence = fact_check(news, web_data)
-
-        process_time = round(time.time() - start,2)
-
+        # 3. บันทึกลง Database
         try:
-
-            supabase.table("search_history").insert({
-
+            db_insert = supabase.table("search_history").insert({
                 "user_query": news,
-                "category": category, # ใส่ Global Search เพื่อให้ฐานข้อมูลไม่พัง
+                "category": category,
                 "ai_result": result,
                 "ai_reason": reason,
                 "confidence": confidence,
-                "sources": web_data
-
+                "sources": references
             }).execute()
-
+            context['record_id'] = db_insert.data[0]['id']
         except Exception as e:
-
             print("DB error:", e)
 
         context.update({
@@ -315,39 +242,19 @@ def index():
         })
 
     response = make_response(render_template("index.html", **context))
-
     response.headers["Cache-Control"] = "no-cache"
-
     return response
-
-# ================================
-# FEEDBACK
-# ================================
 
 @app.route("/feedback", methods=["POST"])
 def feedback():
-
     data = request.json
-
     record_id = data.get("id")
-
     status = data.get("status")
-
     try:
-
-        supabase.table("search_history")\
-        .update({"user_feedback": status})\
-        .eq("id", record_id)\
-        .execute()
-
+        supabase.table("search_history").update({"user_feedback": status}).eq("id", record_id).execute()
         return jsonify({"success": True})
-
     except:
-
         return jsonify({"success": False})
 
-# ================================
-
 if __name__ == "__main__":
-
     app.run(debug=True)
