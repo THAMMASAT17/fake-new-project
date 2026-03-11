@@ -13,7 +13,7 @@ load_dotenv()
 
 app = Flask(__name__)
 # 🟢 ดึง API Key ของ Groq จาก .env
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # 🟢 เชื่อมต่อ Supabase โดยดึงค่าจาก .env
 SUPABASE_URL = os.getenv("SUPABASE_URL")
